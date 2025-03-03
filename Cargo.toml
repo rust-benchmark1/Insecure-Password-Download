@@ -1,0 +1,11 @@
+[package]
+name = "insecure_password_download"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bcrypt = "0.15.0"
+md5 = "0.7.0"
+rocket = "0.4.11"
+rocket-download-response = "0.5.2"
+rocket_contrib = "0.4.11"
