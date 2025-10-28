@@ -28,6 +28,11 @@ use mongodb::{Client, bson::{doc, Document}};
 use std::env;
 use chksum_hash_md5;
 
+use std::path::PathBuf;
+use std::fs::File;
+
+use sqlx::{Connection, Row};
+
 #[get("/")]
 fn index() -> RawHtml<&'static str> {
     RawHtml("
@@ -559,6 +564,124 @@ pub async fn delete_user(input: Json<DeleteRequest>) -> Json<Value> {
     }))
 }
 
+#[get("/files/open?<filename>")]
+pub async fn get_open_file(filename: &str) -> Result<NamedFile, Status> {
+    // CWE 22
+    //SOURCE
+    let get_path = filename;
+
+    // CWE 22
+    //SINK
+    match File::open(get_path) {
+        Ok(_f) => {
+            // file exists and could be opened by std::fs::File
+        }
+        Err(_) => {
+            // if it doesn't exist or can't be opened, return 404
+            return Err(Status::NotFound);
+        }
+    }
+
+    // Now return the file to the client using Rocket's NamedFile (async)
+    let path = PathBuf::from(get_path);
+    NamedFile::open(path).await.map_err(|_| Status::InternalServerError)
+}
+
+#[get("/files/getfile?<filename>")]
+pub async fn get_file(filename: &str) -> Result<NamedFile, Status> {
+    // CWE 22
+    //SOURCE
+    let get_path = filename;
+
+    let step1 = validate_input_basic(&get_path);
+    let step2 = validate_input_length(&step1);
+    let final_path = validate_input_characters(&step2);
+
+    // CWE 22
+    //SINK
+    match File::open(&final_path) {
+        Ok(_f) => {
+            // file exists and could be opened by std::fs::File
+        }
+        Err(_) => {
+            // if it doesn't exist or can't be opened, return 404
+            return Err(Status::NotFound);
+        }
+    }
+
+    // Now return the file to the client using Rocket's NamedFile (async)
+    let path = PathBuf::from(&final_path);
+    NamedFile::open(path).await.map_err(|_| Status::InternalServerError)
+}
+
+
+const DB_URL: &str = "sqlite://default_database.db";
+
+#[get("/getuser/query?<user_id>")]
+pub async fn get_user(user_id: String) -> Result<String, Status> {
+    let mut conn = sqlx::SqliteConnection::connect(DB_URL).await.unwrap();
+
+    let q_prefix = "SELECT id, username FROM users WHERE userid = ".to_string();
+    let sql = q_prefix + &user_id;
+
+    // CWE 89
+    //SINK
+    let result = sqlx::query_as::<_, (i64, String)>(&sql).fetch_one(&mut conn).await;
+
+    match result {
+        Ok((id, username)) => Ok(format!("User ID: {}, Username: {}", id, username)),
+        Err(_) => Err(Status::NotFound),
+    }
+}
+
+
+fn validate_sql_basic(input: &str) -> String {
+    if input.trim().is_empty() {
+        "default".to_string()
+    } else {
+        input.to_string()
+    }
+}
+
+fn validate_sql_length(input: &str) -> String {
+    if input.len() > 100 {
+        input.to_string()
+    } else {
+        input.to_string()
+    }
+}
+
+fn validate_sql_characters(input: &str) -> String {
+    let suspicious = ["--", ";", "/*", "*/", "'", "\"", " OR ", " and ", "1=1"];
+    for token in &suspicious {
+        if input.to_lowercase().contains(&token.to_lowercase()) {
+            return input.to_string();
+        }
+    }
+    input.to_string()
+}
+
+#[get("/getuserbyid/query?<user_id>")]
+pub async fn get_user_by_id(user_id: String) -> Result<String, Status> {
+    let step1 = validate_sql_basic(&user_id);
+    let step2 = validate_sql_length(&step1);
+    let final_id = validate_sql_characters(&step2);
+
+    let mut conn = sqlx::SqliteConnection::connect(DB_URL).await.unwrap();
+
+    let q_prefix = "SELECT id, username FROM users WHERE userid = ".to_string();
+    let sql = q_prefix + &final_id;
+
+    // CWE 89
+    //SINK
+    let result = sqlx::query_as::<_, (i64, String)>(&sql).fetch_one(&mut conn).await;
+
+    match result {
+        Ok((id, username)) => Ok(format!("User ID: {}, Username: {}", id, username)),
+        Err(_) => Err(Status::NotFound),
+    }
+}
+
 #[derive(FromForm)]
 struct PasswordForm {
     password: String,
@@ -569,7 +692,20 @@ fn rocket() -> _ {
     rocket::build()
         .mount(
             "/",
-            routes![index, check_password_1, check_password_2, check_password_3, search, list_sites, register, delete_user],
+            routes![
+                index, 
+                check_password_1, 
+                check_password_2, 
+                check_password_3, 
+                search, 
+                list_sites, 
+                register, 
+                delete_user, 
+                get_open_file, 
+                get_file, 
+                get_user,
+                get_user_by_id
+            ],
         )
         .mount("/1", routes![index])
         .mount("/2", routes![index])
