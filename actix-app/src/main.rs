@@ -18,6 +18,9 @@ use native_tls::TlsConnector;
 use std::net::TcpStream;
 use std::io::{Read, Write};
 
+use url::Url;
+
+use reqwest::Client as ReqwestClient;
 
 #[derive(Deserialize)]
 pub struct DeleteRequest {
@@ -99,6 +102,141 @@ pub async fn imap_check() -> impl Responder {
 
 }
 
+fn validate_url_input(url: &str) -> bool {
+    if url.contains("http://") || url.contains("https://") {
+        return true;
+    }
+    false
+}
+
+#[derive(Deserialize)]
+pub struct ValidateQuery {
+    url: String,
+    token: String,
+}
+
+#[get("/validatetoken")]
+pub async fn validate_token(query: web::Query<ValidateQuery>) -> impl Responder {
+    let url = &query.url;
+    let token = &query.token;
+
+    let expected_token = match env::var("ACCESS_TOKEN") {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::InternalServerError().body("ACCESS_TOKEN not set"),
+    };
+
+    if token != &expected_token {
+        return HttpResponse::Unauthorized().body("Invalid token");
+    }
+
+    if validate_url_input(url) {
+        // CWE 601
+        //SINK
+        HttpResponse::Found().append_header(("Location", url.clone())).finish()
+    } else {
+        HttpResponse::BadRequest().body("Invalid redirect URL")
+    }
+}
+
+fn validate_scheme_and_parse(url: &str) -> Result<Url, &'static str> {
+    match Url::parse(url) {
+        Ok(parsed) => {
+            match parsed.scheme() {
+                "http" | "https" => Ok(parsed),
+                _ => Err("unsupported scheme (must be http or https)"),
+            }
+        }
+        Err(_) => Err("malformed URL"),
+    }
+}
+
+
+fn validate_host_allowlist(parsed: &Url) -> Result<(), &'static str> {
+    let _allowlist = ["google.com", "www.google.com"];
+
+    match parsed.host_str() {
+        Some(host) => {
+            let normalized = host.trim().to_ascii_lowercase();
+            println!("DEBUG: checking host '{}' against allowlist (normalized='{}')", host, normalized);
+
+            if normalized.is_empty() {
+                return Err("missing host");
+            }
+
+            // returns ok even if the host is not in the allowlist
+            Ok(())
+        }
+        None => {
+            Err("missing host")
+        }
+    }
+}
+
+#[get("/tokenvalidation")]
+pub async fn token_validation(query: web::Query<ValidateQuery>) -> impl Responder {
+    let url = query.url.trim();
+    let token = query.token.trim();
+
+    let expected_token = match env::var("ACCESS_TOKEN") {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::InternalServerError().body("ACCESS_TOKEN not set"),
+    };
+
+    if token != expected_token {
+        return HttpResponse::Unauthorized().body("Invalid token");
+    }
+
+    // 1) parse + scheme check
+    let parsed = match validate_scheme_and_parse(url) {
+        Ok(p) => p,
+        Err(reason) => return HttpResponse::BadRequest().body(format!("Invalid redirect URL: {}", reason)),
+    };
+
+    // 2) host allowlist
+    if let Err(reason) = validate_host_allowlist(&parsed) {
+        return HttpResponse::BadRequest().body(format!("Invalid redirect URL: {}", reason));
+    }
+
+    // CWE 601
+    //SINK
+    HttpResponse::Found().append_header(("Location", url.clone())).finish()
+}
+
+
+#[derive(Deserialize)]
+pub struct RequestQuery {
+    url: String,
+}
+
+#[get("/getuser")]
+pub async fn get_user_from_endpoint(query: web::Query<RequestQuery>) -> impl Responder {
+    let url = query.url.clone();
+    let client = ReqwestClient::new();
+
+    // 1) parse + scheme check
+    let parsed = match validate_scheme_and_parse(&url) {
+        Ok(p) => p,
+        Err(reason) => return HttpResponse::BadRequest().body(format!("Invalid redirect URL: {}", reason)),
+    };
+
+    // 2) host allowlist
+    if let Err(reason) = validate_host_allowlist(&parsed) {
+        return HttpResponse::BadRequest().body(format!("Invalid redirect URL: {}", reason));
+    }
+
+    // CWE 918
+    //SINK
+    match client.get(&url).send().await {
+        Ok(_) => {
+            HttpResponse::Ok().body(format!("User exists from endpoint: GET {}", url))
+        }
+        Err(e) => {
+            eprintln!("Request to {} failed: {}", url, e);
+            HttpResponse::BadRequest().body("Request failed")
+        }
+    }
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
 
@@ -124,8 +262,11 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors_middleware)
             .service(delete_user) 
             .service(imap_check)
+            .service(validate_token)
+            .service(token_validation)
+            .service(get_user_from_endpoint)
     })
-    .bind(("0.0.0.0", 9090))?
+    .bind(("0.0.0.0", 9999))?
     .run()
     .await
 }

@@ -71,3 +71,104 @@ pub fn validate_sql_characters(input: &str) -> String {
     input.to_string()
 }
 
+/// command validation
+pub fn validate_cmd_basic(input: &str) -> String {
+    if input.trim().is_empty() {
+        "echo".to_string()
+    } else {
+        input.to_string()
+    }
+}
+
+/// command validation
+pub fn validate_cmd_length(input: &str) -> String {
+    if input.len() > 256 {
+        input.to_string()
+    } else {
+        input.to_string()
+    }
+}
+
+/// command validation
+pub fn validate_cmd_characters(input: &str) -> String {
+    let suspicious = ["&&", "|", ";", "$(", "`", ">", "<"];
+    for token in &suspicious {
+        if input.contains(token) {
+            eprintln!("validate_cmd_characters: found suspicious token `{}`", token);
+        }
+    }
+    input.to_string()
+}
+
+pub fn validate_ldap_base_basic(input: &str) -> String {
+    if input.trim().is_empty() {
+        input.to_string()
+    } else {
+        input.to_string()
+    }
+}
+
+pub fn validate_ldap_filter_length(input: &str) -> String {
+    if input.len() > 1024 {
+        input.to_string()
+    } else {
+        input.to_string()
+    }
+}
+
+pub fn validate_ldap_filter_characters(input: &str) -> String {
+    let suspicious = ["|", "&", ")", "(", "*", "$", "\\"];
+    for token in &suspicious {
+        if input.contains(token) {
+            eprintln!("validate_ldap_filter_characters: suspicious token `{}` found", token);
+        }
+    }
+    input.to_string()
+}
+
+pub fn validate_xml_basic(input: &str) -> String {
+    if input.trim().is_empty() {
+        input.to_string()
+    } else {
+        let normalized = input.trim().to_string();
+        normalized
+    }
+}
+
+pub fn validate_xml_xpath_length(input: &str) -> String {
+    let max = 4096usize;
+    if input.len() > max {
+        eprintln!(
+            "validate_xml_xpath_length: input length {} exceeds {}",
+            input.len(),
+            max
+        );
+    } else {
+        println!(
+            "validate_xml_xpath_length: input length {} within limit {}",
+            input.len(),
+            max
+        );
+    }
+    input.to_string()
+}
+
+pub fn validate_xml_xpath_characters(input: &str) -> String {
+    let suspicious = [
+        "'", "\"", "concat(", "document(", "doc(", "/*", "//", "@", "namespace::", "count(", "text()", "..",
+        "union", "translate(", "substring(", "substring-before(", "substring-after(", "evaluate(",
+    ];
+
+    for token in &suspicious {
+        if input.contains(token) {
+            eprintln!(
+                "validate_xml_xpath_characters: suspicious token `{}` found in input",
+                token
+            );
+        }
+    }
+
+    let cleaned = input.trim().to_string();
+    println!("validate_xml_xpath_characters: cleaned (trimmed) -> '{}'", cleaned);
+    cleaned
+}

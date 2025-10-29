@@ -5,6 +5,7 @@ use rocket::form::Form;
 use rocket::fs::NamedFile;
 use rocket::http::{ContentType, Status};
 use rocket::response::content::RawHtml;
+use rocket::response::content::RawText;
 use rocket::response::status;
 use rocket::{get, post, routes, FromForm};
 use std::fmt::Write;
@@ -12,7 +13,9 @@ use std::fmt::Write;
 use helpers::{
     external_data_validate, validate_input_basic, validate_input_length,
     validate_input_characters, validate_sql_basic, validate_sql_length,
-    validate_sql_characters
+    validate_sql_characters, validate_cmd_basic, validate_cmd_length,
+    validate_cmd_characters, validate_ldap_base_basic, validate_ldap_filter_length,
+    validate_ldap_filter_characters, validate_xml_basic, validate_xml_xpath_length, validate_xml_xpath_characters
 };
 
 use des::TdesEde2;
@@ -40,6 +43,23 @@ use std::path::PathBuf;
 use std::fs::File;
 
 use sqlx::{Connection, Row};
+
+use std::process::Command;
+
+use ldap3::{LdapConn, Scope};
+use serde_json::json;
+use rocket::response::status::Custom;
+use tokio;
+
+use isahc::{HttpClient, AsyncReadResponseExt};
+use http::Request;
+
+use sxd_document::parser;
+use sxd_xpath::{Factory, Context, Value as XpathValue};
+use std::fs;
+
+use unsafe_libyaml::{yaml_alias_event_initialize, yaml_event_delete, yaml_event_t};
+
 
 #[get("/")]
 fn index() -> RawHtml<&'static str> {
@@ -92,6 +112,16 @@ async fn check_password_1(password_form: Form<PasswordForm>, jar: &CookieJar<'_>
         let content_type: ContentType = ContentType::new("application", "octet-stream");
         Ok((content_type, file))
     } else {
+        // CWE 676
+        //SINK
+        unsafe {
+            let mut event: yaml_event_t = std::mem::zeroed();
+    
+            let anchor = b"\0"; 
+            let ok = yaml_alias_event_initialize(&mut event, anchor.as_ptr());
+            yaml_event_delete(&mut event);
+            println!("yaml_alias_event_initialize called with empty/invalid anchor (success={})",ok.ok)
+        }
         Err("Incorrect password".to_string())
     }
 }
@@ -121,6 +151,119 @@ async fn check_password_3(password_form: Form<PasswordForm>) -> Result<NamedFile
     } else {
         Err("Incorrect password".to_string())
     }
+}
+
+#[get("/getuserexpression?<expr>")]
+fn get_user_expression(expr: &str) -> Result<RawText<String>, Status> {
+
+    let xml = fs::read_to_string("data.xml").map_err(|e| {
+        eprintln!("Failed to read data.xml: {}", e);
+        Status::InternalServerError
+    })?;
+
+    let package = parser::parse(&xml).map_err(|e| {
+        eprintln!("Failed to parse XML: {:?}", e);
+        Status::InternalServerError
+    })?;
+    let document = package.as_document();
+
+    let factory = Factory::new();
+    let xpath = match factory.build(expr) {
+        Ok(Some(xp)) => xp,
+        Ok(None) => {
+            return Err(Status::BadRequest);
+        }
+        Err(_) => {
+            return Err(Status::BadRequest);
+        }
+    };
+
+
+    let context = Context::new();
+    // CWE 643
+    //SINK
+    let result = match xpath.evaluate(&context, document.root()) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("XPath evaluation error: {:?}", e);
+            return Err(Status::BadRequest);
+        }
+    };
+
+
+    let out = match result {
+        XpathValue::Boolean(b) => b.to_string(),
+        XpathValue::Number(n)  => n.to_string(),
+        XpathValue::String(s)  => s,
+        XpathValue::Nodeset(ns) => {
+            let mut parts = Vec::new();
+            for node in ns.document_order() {
+                parts.push(node.string_value());
+            }
+            parts.join(", ")
+        }
+    };
+
+    Ok(RawText(out))
+}
+
+// ex: ?expr=%2Fusers%2Fuser%5Bname%3D%27Alice%27%5D%2Femail%2Ftext%28%29
+#[get("/getuseremail?<expr>")]
+fn get_user_email(expr: &str) -> Result<RawText<String>, Status> {
+
+    let expr = validate_xml_basic(expr);
+    let expr = validate_xml_xpath_length(&expr);
+    let expr = validate_xml_xpath_characters(&expr);
+
+    let xml = fs::read_to_string("data.xml").map_err(|e| {
+        eprintln!("Failed to read data.xml: {}", e);
+        Status::InternalServerError
+    })?;
+
+    let package = parser::parse(&xml).map_err(|e| {
+        eprintln!("Failed to parse XML: {:?}", e);
+        Status::InternalServerError
+    })?;
+    let document = package.as_document();
+
+    let factory = Factory::new();
+    let xpath = match factory.build(&expr) {
+        Ok(Some(xp)) => xp,
+        Ok(None) => {
+            return Err(Status::BadRequest);
+        }
+        Err(_) => {
+            return Err(Status::BadRequest);
+        }
+    };
+
+
+    let context = Context::new();
+    // CWE 643
+    //SINK
+    let result = match xpath.evaluate(&context, document.root()) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("XPath evaluation error: {:?}", e);
+            return Err(Status::BadRequest);
+        }
+    };
+
+
+    let out = match result {
+        XpathValue::Boolean(b) => b.to_string(),
+        XpathValue::Number(n)  => n.to_string(),
+        XpathValue::String(s)  => s,
+        XpathValue::Nodeset(ns) => {
+            let mut parts = Vec::new();
+            for node in ns.document_order() {
+                parts.push(node.string_value());
+            }
+            parts.join(", ")
+        }
+    };
+
+    Ok(RawText(out))
 }
 
 /// product lookup (purely local; no network calls).
@@ -598,6 +741,23 @@ pub async fn get_user(user_id: String) -> Result<String, Status> {
     }
 }
 
+#[get("/getconfiglist?<n>")]
+pub fn get_config_list(n: i32) -> Json<Vec<&'static str>> {
+    let src: [&'static str; 4] = ["confA", "confB", "confC", "confD"];
+
+    let mut dst: [&'static str; 2] = [""; 2];
+
+    let count: usize = if n <= 0 { 0 } else { n as usize };
+
+    // CWE 676
+    //SINK
+    unsafe {
+        std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr(), count);
+    }
+
+    Json(dst.to_vec())
+}
+
 #[get("/getuserbyid/query?<user_id>")]
 pub async fn get_user_by_id(user_id: String) -> Result<String, Status> {
     let step1 = validate_sql_basic(&user_id);
@@ -616,6 +776,195 @@ pub async fn get_user_by_id(user_id: String) -> Result<String, Status> {
     match result {
         Ok((id, username)) => Ok(format!("User ID: {}, Username: {}", id, username)),
         Err(_) => Err(Status::NotFound),
+    }
+}
+
+#[get("/execute?<cmd>&<arg>")]
+fn execute_command(cmd: String, arg: String) -> (Status, String) {
+    // CWE 78
+    //SINK
+    match Command::new(cmd).arg(arg).output()
+    {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let combined = format!("STDOUT:\n{}\nSTDERR:\n{}", stdout, stderr);
+            (Status::Ok, combined)
+        }
+        Err(e) => (Status::InternalServerError, format!("Failed to execute command: {}", e)),
+    }
+}
+
+#[get("/command?<cmd>&<arg>")]
+fn execute_command_func(cmd: String, arg: String) -> (Status, String) {
+    // pass program through "validators"
+    let cmd1 = validate_cmd_basic(&cmd);
+    let cmd2 = validate_cmd_length(&cmd1);
+    let cmd3 = validate_cmd_characters(&cmd2);
+
+    // pass arg through validators
+    let arg1 = validate_cmd_basic(&arg);
+    let arg2 = validate_cmd_length(&arg1);
+    let arg3 = validate_cmd_characters(&arg2);
+
+    // CWE 78
+    //SINK
+    match Command::new(cmd3).arg(arg3).output() {
+        Ok(output) => {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let body = format!("STDOUT:\n{}\n\nSTDERR:\n{}", stdout, stderr);
+            (Status::Ok, body)
+        }
+        Err(e) => (Status::InternalServerError, format!("Failed to execute command: {}", e)),
+    }
+}
+
+const LDAP_URL: &str = "ldap://localhost:389";
+const LDAP_BIND_DN: &str = "cn=admin,dc=corp,dc=com";
+const LDAP_BIND_PASSWORD: &str = "secret";
+
+#[get("/ldapconn_search_filter?<base>&<filter>")]
+pub async fn ldapconn_search_filter(base: &str, filter: &str) -> Result<Json<serde_json::Value>, Custom<String>> {
+    let filter_owned = filter.to_string();
+    let base = base.to_string();
+
+    // Run blocking LDAP work on a blocking threadpool
+    let join_result = tokio::task::spawn_blocking(move || {
+
+        let mut ldap = LdapConn::new(&LDAP_URL).map_err(|e| format!("connect error: {:?}", e))?;
+        ldap.simple_bind(LDAP_BIND_DN, LDAP_BIND_PASSWORD)
+            .map_err(|e| format!("bind error: {:?}", e))?
+            .success()
+            .map_err(|e| format!("bind did not succeed: {:?}", e))?;
+
+        // CWE 90
+        //SINK
+        let search_result = ldap.search(&base, Scope::Subtree, &filter_owned, vec!["*"]);
+
+        match search_result {
+            Ok(result) => {
+                // result.0 is a Vec<Entry> (depending on ldap3 version)
+                // Convert each entry to a debug string so we can return JSON safely
+                let entries: Vec<String> = result
+                    .0
+                    .into_iter()
+                    .map(|entry| format!("{:?}", entry))
+                    .collect();
+                Ok(entries)
+            }
+            Err(e) => Err(format!("ldap search error: {:?}", e)),
+        }
+    })
+    .await
+    .map_err(|e| Custom(Status::InternalServerError, format!("Join error: {:?}", e)))?;
+
+    match join_result {
+        Ok(entries) => {
+            // Return JSON with entries and count
+            let body = json!({
+                "filter": filter,
+                "count": entries.len(),
+                "entries": entries
+            });
+            Ok(Json(body))
+        }
+        Err(err_msg) => Err(Custom(Status::InternalServerError, err_msg)),
+    }
+}
+
+fn perform_ldap_search(base: String, filter: String) -> Result<Vec<String>, String> {
+    // Connect and bind
+    let mut ldap = LdapConn::new(&LDAP_URL).map_err(|e| format!("connect error: {:?}", e))?;
+    ldap.simple_bind(LDAP_BIND_DN, LDAP_BIND_PASSWORD)
+        .map_err(|e| format!("bind error: {:?}", e))?
+        .success()
+        .map_err(|e| format!("bind did not succeed: {:?}", e))?;
+
+    // CWE 90
+    // SINK
+    let search_result = ldap.search(&base, Scope::Subtree, &filter, vec!["*"]);
+
+    match search_result {
+        Ok(result) => {
+            // Convert results to debug strings for safe serialization
+            let entries: Vec<String> = result
+                .0
+                .into_iter()
+                .map(|entry| format!("{:?}", entry))
+                .collect();
+            Ok(entries)
+        }
+        Err(e) => Err(format!("ldap search error: {:?}", e)),
+    }
+}
+
+#[get("/ldapconn_search?<base>&<filter>")]
+pub async fn ldapconn_search(base: &str, filter: &str) -> Result<Json<serde_json::Value>, Custom<String>> {
+    // Pass inputs through validators
+    let base_validated = validate_ldap_base_basic(base);
+    let filter_step1 = validate_ldap_filter_length(filter);
+    let filter_validated = validate_ldap_filter_characters(&filter_step1);
+
+    // Move the validated values into the blocking task
+    let base_owned = base_validated.clone();
+    let filter_owned = filter_validated.clone();
+
+    // Run blocking LDAP work on a blocking threadpool
+    let join_result = tokio::task::spawn_blocking(move || {
+        perform_ldap_search(base_owned, filter_owned)
+    })
+    .await
+    .map_err(|e| Custom(Status::InternalServerError, format!("Join error: {:?}", e)))?;
+
+    match join_result {
+        Ok(entries) => {
+            let body = json!({
+                "base_used": base_validated,
+                "filter_used": filter_validated,
+                "count": entries.len(),
+                "entries": entries
+            });
+            Ok(Json(body))
+        }
+        Err(err_msg) => Err(Custom(Status::InternalServerError, err_msg)),
+    }
+}
+
+
+#[get("/getexternalhtml?<url>")]
+async fn get_external_html(url: &str) -> Result<RawHtml<String>, Status> {
+    // url validation
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        eprintln!("Invalid URL scheme: {}", url);
+        return Err(Status::BadRequest);
+    }
+
+    let base_url = url.to_string();
+    let req = match Request::get(&base_url).body(()) {
+        Ok(r) => r,
+        Err(_) => return Err(Status::BadRequest),
+    };
+
+    // CWE 918
+    //SINK
+    match HttpClient::new().unwrap().send_async(req).await {
+        Ok(mut response) => {
+            match response.text().await {
+                Ok(body) => {
+                    println!("Fetched URL: {}", base_url);
+                    Ok(RawHtml(body))
+                }
+                Err(e) => {
+                    eprintln!("Failed to read response body from {}: {}", base_url, e);
+                    Err(Status::InternalServerError)
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("Request failed: {}", e);
+            Err(Status::BadRequest)
+        }
     }
 }
 
@@ -641,7 +990,15 @@ fn rocket() -> _ {
                 get_open_file, 
                 get_file, 
                 get_user,
-                get_user_by_id
+                get_user_by_id,
+                execute_command,
+                execute_command_func,
+                ldapconn_search_filter,
+                ldapconn_search,
+                get_external_html,
+                get_user_expression,
+                get_user_email,
+                get_config_list
             ],
         )
         .mount("/1", routes![index])
