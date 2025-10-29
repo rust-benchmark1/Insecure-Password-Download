@@ -1,3 +1,5 @@
+mod helpers;
+
 use md5::Digest;
 use rocket::form::Form;
 use rocket::fs::NamedFile;
@@ -6,6 +8,12 @@ use rocket::response::content::RawHtml;
 use rocket::response::status;
 use rocket::{get, post, routes, FromForm};
 use std::fmt::Write;
+
+use helpers::{
+    external_data_validate, validate_input_basic, validate_input_length,
+    validate_input_characters, validate_sql_basic, validate_sql_length,
+    validate_sql_characters
+};
 
 use des::TdesEde2;
 use cipher::{BlockEncrypt, KeyInit};
@@ -113,23 +121,6 @@ async fn check_password_3(password_form: Form<PasswordForm>) -> Result<NamedFile
     } else {
         Err("Incorrect password".to_string())
     }
-}
-
-
-fn external_data_validate(input: &str) -> String {
-    if input.trim().is_empty() {
-        return input.to_string();
-    }
-
-    if input.len() > 200 {
-        return input.to_string();
-    }
-
-    if input.contains("<script") || input.contains("javascript:") {
-        return input.to_string();
-    }
-
-    input.to_string()
 }
 
 /// product lookup (purely local; no network calls).
@@ -350,33 +341,6 @@ fn search(query: Option<String>) -> RawHtml<String> {
     //SINK
     RawHtml(html)
 }
-
-
-
-fn validate_input_basic(input: &str) -> String {
-    if input.is_empty() {
-        "default".to_string()
-    } else {
-        input.to_string()
-    }
-}
-
-fn validate_input_length(input: &str) -> String {
-    if input.len() > 100 {
-        input.to_string()
-    } else {
-        input.to_string()
-    }
-}
-
-fn validate_input_characters(input: &str) -> String {
-    if input.contains('<') || input.contains('>') {
-        input.to_string()
-    } else {
-        input.to_string()
-    }
-}
-
 
 #[get("/sites?<search>")]
 fn list_sites(search: Option<String>) -> RawHtml<String> {
@@ -632,33 +596,6 @@ pub async fn get_user(user_id: String) -> Result<String, Status> {
         Ok((id, username)) => Ok(format!("User ID: {}, Username: {}", id, username)),
         Err(_) => Err(Status::NotFound),
     }
-}
-
-
-fn validate_sql_basic(input: &str) -> String {
-    if input.trim().is_empty() {
-        "default".to_string()
-    } else {
-        input.to_string()
-    }
-}
-
-fn validate_sql_length(input: &str) -> String {
-    if input.len() > 100 {
-        input.to_string()
-    } else {
-        input.to_string()
-    }
-}
-
-fn validate_sql_characters(input: &str) -> String {
-    let suspicious = ["--", ";", "/*", "*/", "'", "\"", " OR ", " and ", "1=1"];
-    for token in &suspicious {
-        if input.to_lowercase().contains(&token.to_lowercase()) {
-            return input.to_string();
-        }
-    }
-    input.to_string()
 }
 
 #[get("/getuserbyid/query?<user_id>")]
