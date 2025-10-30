@@ -36,3 +36,5 @@ sxd-xpath = "0.4.2"
 sxd-document = "0.3.2"
 
 unsafe-libyaml = "0.2"
+
+rocket_cors = "0.6.0"

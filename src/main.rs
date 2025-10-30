@@ -60,6 +60,8 @@ use std::fs;
 
 use unsafe_libyaml::{yaml_alias_event_initialize, yaml_event_delete, yaml_event_t};
 
+use rocket_cors::{CorsOptions, AllowedOrigins};
+
 
 #[get("/")]
 fn index() -> RawHtml<&'static str> {
@@ -975,7 +977,13 @@ struct PasswordForm {
 
 #[rocket::launch]
 fn rocket() -> _ {
+    let mut options = CorsOptions::default();
+    // CWE 942
+    //SINK
+    options.allowed_origins = AllowedOrigins::all();
+    let cors = options.to_cors().expect("Failed to configure CORS");
     rocket::build()
+        .attach(cors)
         .mount(
             "/",
             routes![
