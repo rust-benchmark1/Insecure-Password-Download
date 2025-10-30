@@ -88,7 +88,7 @@ async fn check_password_1(password_form: Form<PasswordForm>, jar: &CookieJar<'_>
     let password: &str = "password";
 
     if &password_form.password == password {
-        let mut blocks = [GenericArray::clone_from_slice(password.as_bytes())];
+        let mut blocks = [GenericArray::clone_from_slice(password_form.password.as_bytes())];
         // CWE 327
         //SINK
         TdesEde2::new(GenericArray::from_slice(b"3234562890ABCGEA")).encrypt_blocks(&mut blocks);
@@ -292,8 +292,8 @@ fn fetch_products(search_term: &str) -> Vec<(String, String, f32)> {
 
 #[get("/search?<query>")]
 fn search(query: Option<String>) -> RawHtml<String> {
-    // CWE 79
-    //SOURCE
+    
+    
     let raw_term = query.unwrap_or_default();
     let validated = external_data_validate(&raw_term);
 
@@ -489,8 +489,8 @@ fn search(query: Option<String>) -> RawHtml<String> {
 
 #[get("/sites?<search>")]
 fn list_sites(search: Option<String>) -> RawHtml<String> {
-    // CWE 79
-    //SOURCE
+    
+    
     let query = search.unwrap_or_else(|| "example.com".to_string());
 
     // pass through all validations
@@ -586,8 +586,8 @@ pub struct RegisterForm {
 #[post("/register", data = "<form>")]
 pub async fn register(form: Form<RegisterForm>) -> Result<String, status::Custom<String>> {
     let username = form.username.trim();
-    // CWE 327
-    //SOURCE
+    
+    
     let password = form.password.trim();
 
     if username.as_bytes().len() != 8 || password.as_bytes().len() != 8 {
@@ -640,8 +640,8 @@ pub struct DeleteRequest {
 
 #[post("/delete_user", data = "<input>")]
 pub async fn delete_user(input: Json<DeleteRequest>) -> Json<Value> {
-    // CWE 328
-    //SOURCE
+    
+    
     let external_data = input.query.clone();
 
     // CWE 328
@@ -649,8 +649,8 @@ pub async fn delete_user(input: Json<DeleteRequest>) -> Json<Value> {
     let digest = chksum_hash_md5::hash(external_data);
     env::set_var("LAST_REQUEST_DATA", digest.to_hex_lowercase());
 
-    // CWE 943
-    //SOURCE
+    
+    
     let query = input.query.clone();
     let step1 = validate_input_basic(&query);
     let step2 = validate_input_length(&step1);
@@ -675,8 +675,8 @@ pub async fn delete_user(input: Json<DeleteRequest>) -> Json<Value> {
 
 #[get("/files/open?<filename>")]
 pub async fn get_open_file(filename: &str) -> Result<NamedFile, Status> {
-    // CWE 22
-    //SOURCE
+    
+    
     let get_path = filename;
 
     // CWE 22
@@ -698,8 +698,8 @@ pub async fn get_open_file(filename: &str) -> Result<NamedFile, Status> {
 
 #[get("/files/getfile?<filename>")]
 pub async fn get_file(filename: &str) -> Result<NamedFile, Status> {
-    // CWE 22
-    //SOURCE
+    
+    
     let get_path = filename;
 
     let step1 = validate_input_basic(&get_path);
