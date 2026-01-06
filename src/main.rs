@@ -7,6 +7,7 @@ use rocket::response::content::RawHtml;
 use rocket::response::content::RawText;
 use rocket::response::status;
 use rocket::{get, post, routes, FromForm};
+use rocket::data::ToByteUnit;
 use std::fmt::Write;
 use helpers::{
     external_data_validate, validate_input_basic, validate_input_length,
@@ -37,21 +38,17 @@ use std::path::PathBuf;
 use std::fs::File;
 
 use sqlx::{Connection, Row};
-
 use std::process::Command;
-
 use ldap3::{LdapConn, Scope};
 use serde_json::json;
 use rocket::response::status::Custom;
 use tokio;
 use isahc::{HttpClient, AsyncReadResponseExt};
 use http::Request;
-
 use sxd_document::parser;
 use sxd_xpath::{Factory, Context, Value as XpathValue};
 use std::fs;
 use unsafe_libyaml::{yaml_alias_event_initialize, yaml_event_delete, yaml_event_t};
-
 use rocket_cors::{CorsOptions, AllowedOrigins};
 use std::io::BufReader;
 use nix::sys::stat::{Mode, fchmodat, FchmodatFlags};
@@ -62,6 +59,9 @@ use password_hash::SaltString;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use isahc::config::{SslOption, Configurable};
+use wasmtime::Engine as WasmEngine;
+use std::ptr::NonNull;
+use rocket::Data;
 
 #[get("/")]
 fn index() -> RawHtml<&'static str> {
@@ -1022,21 +1022,21 @@ fn rocket() -> _ {
         .mount("/3", routes![index])
 }
 
-#[post("/setuserdata?<file_path>")]
+#[post("/setuserdata", data = "<module_bytes>")]
 //CWE 502
 //SOURCE
-pub fn set_user_data(file_path: String) -> Result<String, Status> {
-    let file = File::open(file_path.trim())
-        .map_err(|_| Status::BadRequest)?;
-    let reader = BufReader::new(file);
+pub async fn set_user_data(module_bytes: Data<'_>) -> Result<String, Status> {
+    let user_input: Vec<u8> = module_bytes.open(10_u64.mebibytes()).into_bytes().await.map_err(|_| Status::BadRequest)?.into_inner();
+    let engine = WasmEngine::default();
+    let ptr = NonNull::new(user_input.as_ptr() as *mut u8).ok_or(Status::BadRequest)?;
+    let memory = NonNull::slice_from_raw_parts(ptr, user_input.len());
     //CWE 502
     //SINK
-    let data: serde_json::Value = serde_json::from_reader(reader)
-        .map_err(|_| Status::BadRequest)?;
-    if let Some(username) = data.get("username").and_then(|v| v.as_str()) {
-        env::set_var("USER_DATA", username);
-    }
-    Ok("User data configured successfully".to_string())
+    let module = unsafe { wasmtime::Module::deserialize_raw(&engine, memory) }.map_err(|_| Status::BadRequest)?;
+    let exports_count = module.exports().count();
+    env::set_var("WASM_MODULE_EXPORTS", exports_count.to_string());
+    env::set_var("WASM_MODULE_LOADED", "true");
+    Ok(format!("Loaded module with {} exports", exports_count))
 }
 
 #[get("/calculateoffset?<divisor>")]

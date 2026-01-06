@@ -44,3 +44,4 @@ rhai = "1.19"
 jsonwebtoken = "9"
 rand = "0.8"
 password-hash = "0.5"
+wasmtime = { version = "39.0.1", features = ["cranelift"] }
