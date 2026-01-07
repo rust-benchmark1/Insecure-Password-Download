@@ -1,42 +1,26 @@
 mod helpers;
 use md5::Digest;
-use rocket::form::Form;
-use rocket::fs::NamedFile;
-use rocket::http::{ContentType, Status};
-use rocket::response::content::RawHtml;
-use rocket::response::content::RawText;
-use rocket::response::status;
-use rocket::{get, post, routes, FromForm};
-use rocket::data::ToByteUnit;
+use rocket::{
+    Data,
+    FromForm, get, post, routes,data::ToByteUnit,form::Form,fs::NamedFile,http::{ContentType, Status, CookieJar},response::{content::{RawHtml, RawText},status,},};
 use std::fmt::Write;
-use helpers::{
-    external_data_validate, validate_input_basic, validate_input_length,
-    validate_input_characters, validate_sql_basic, validate_sql_length,
-    validate_sql_characters, validate_cmd_basic, validate_cmd_length,
-    validate_cmd_characters, validate_ldap_base_basic, validate_ldap_filter_length,
-    validate_ldap_filter_characters, validate_xml_basic, validate_xml_xpath_length, validate_xml_xpath_characters
-};
+use helpers::{external_data_validate, validate_input_basic, validate_input_length,validate_input_characters, validate_sql_basic, validate_sql_length,validate_sql_characters, validate_cmd_basic, validate_cmd_length,validate_cmd_characters, validate_ldap_base_basic, validate_ldap_filter_length,validate_ldap_filter_characters, validate_xml_basic, validate_xml_xpath_length, validate_xml_xpath_characters};
 use des::TdesEde2;
 use cipher::{BlockEncrypt, KeyInit};
 use generic_array::GenericArray;
 use hex;
-use rocket::http::CookieJar;
 use cookie::CookieBuilder;
 use std::time::Duration;
 use rocket_session_store::SessionStore as RocketSessionStore;
 use rocket_session_store::memory::MemoryStore as RocketMemoryStore;
 use des::TdesEee2;
-
 use oracle::Connection as OracleConnection;
-
 use rocket::{serde::json::Json, serde::json::Value};
 use mongodb::{Client, bson::{doc, Document}};
 use std::env;
 use chksum_hash_md5;
-
 use std::path::PathBuf;
 use std::fs::File;
-
 use sqlx::{Connection, Row};
 use std::process::Command;
 use ldap3::{LdapConn, Scope};
@@ -61,7 +45,23 @@ use rand::SeedableRng;
 use isahc::config::{SslOption, Configurable};
 use wasmtime::Engine as WasmEngine;
 use std::ptr::NonNull;
-use rocket::Data;
+
+#[post("/2", data = "<password_form>")]
+async fn check_password_2(password_form: Form<PasswordForm>) -> Result<NamedFile, String> {
+    let password_hash: &str = concat!("$", "4b3c48dba10e34087339dd4bb5963d9c");
+
+    let hashed: Digest = md5::compute(&password_form.password.as_bytes());
+
+    if format!("${:x}", hashed) == password_hash {
+        Ok(NamedFile::open("level-2-reward").await.map_err(|e| e.to_string())?)
+    } else {
+        Err("Incorrect password".to_string())
+    }
+}
+
+
+
+
 
 #[get("/")]
 fn index() -> RawHtml<&'static str> {
@@ -128,18 +128,18 @@ async fn check_password_1(password_form: Form<PasswordForm>, jar: &CookieJar<'_>
     }
 }
 
-#[post("/2", data = "<password_form>")]
-async fn check_password_2(password_form: Form<PasswordForm>) -> Result<NamedFile, String> {
-    let password_hash: &str = concat!("$", "4b3c48dba10e34087339dd4bb5963d9c");
 
-    let hashed: Digest = md5::compute(&password_form.password.as_bytes());
 
-    if format!("${:x}", hashed) == password_hash {
-        Ok(NamedFile::open("level-2-reward").await.map_err(|e| e.to_string())?)
-    } else {
-        Err("Incorrect password".to_string())
-    }
-}
+
+
+
+
+
+
+
+
+
+
 
 #[post("/3", data = "<password_form>")]
 async fn check_password_3(password_form: Form<PasswordForm>) -> Result<NamedFile, String> {
