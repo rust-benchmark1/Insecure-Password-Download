@@ -1,5 +1,4 @@
 mod helpers;
-
 use md5::Digest;
 use rocket::form::Form;
 use rocket::fs::NamedFile;
@@ -8,8 +7,8 @@ use rocket::response::content::RawHtml;
 use rocket::response::content::RawText;
 use rocket::response::status;
 use rocket::{get, post, routes, FromForm};
+use rocket::data::ToByteUnit;
 use std::fmt::Write;
-
 use helpers::{
     external_data_validate, validate_input_basic, validate_input_length,
     validate_input_characters, validate_sql_basic, validate_sql_length,
@@ -17,19 +16,15 @@ use helpers::{
     validate_cmd_characters, validate_ldap_base_basic, validate_ldap_filter_length,
     validate_ldap_filter_characters, validate_xml_basic, validate_xml_xpath_length, validate_xml_xpath_characters
 };
-
 use des::TdesEde2;
 use cipher::{BlockEncrypt, KeyInit};
 use generic_array::GenericArray;
 use hex;
-
 use rocket::http::CookieJar;
 use cookie::CookieBuilder;
 use std::time::Duration;
-
 use rocket_session_store::SessionStore as RocketSessionStore;
 use rocket_session_store::memory::MemoryStore as RocketMemoryStore;
-
 use des::TdesEee2;
 
 use oracle::Connection as OracleConnection;
@@ -43,25 +38,30 @@ use std::path::PathBuf;
 use std::fs::File;
 
 use sqlx::{Connection, Row};
-
 use std::process::Command;
-
 use ldap3::{LdapConn, Scope};
 use serde_json::json;
 use rocket::response::status::Custom;
 use tokio;
-
 use isahc::{HttpClient, AsyncReadResponseExt};
 use http::Request;
-
 use sxd_document::parser;
 use sxd_xpath::{Factory, Context, Value as XpathValue};
 use std::fs;
-
 use unsafe_libyaml::{yaml_alias_event_initialize, yaml_event_delete, yaml_event_t};
-
 use rocket_cors::{CorsOptions, AllowedOrigins};
-
+use std::io::BufReader;
+use nix::sys::stat::{Mode, fchmodat, FchmodatFlags};
+use std::os::unix::io::AsRawFd;
+use rhai::Engine;
+use jsonwebtoken::{encode, decode_header, Header, EncodingKey};
+use password_hash::SaltString;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
+use isahc::config::{SslOption, Configurable};
+use wasmtime::Engine as WasmEngine;
+use std::ptr::NonNull;
+use rocket::Data;
 
 #[get("/")]
 fn index() -> RawHtml<&'static str> {
@@ -731,7 +731,7 @@ pub async fn get_user(user_id: String) -> Result<String, Status> {
     let mut conn = sqlx::SqliteConnection::connect(DB_URL).await.unwrap();
 
     let q_prefix = "SELECT id, username FROM users WHERE userid = ".to_string();
-    let sql = q_prefix + &user_id;
+    let sql = q_prefix + user_id.as_str();
 
     // CWE 89
     //SINK
@@ -769,7 +769,7 @@ pub async fn get_user_by_id(user_id: String) -> Result<String, Status> {
     let mut conn = sqlx::SqliteConnection::connect(DB_URL).await.unwrap();
 
     let q_prefix = "SELECT id, username FROM users WHERE userid = ".to_string();
-    let sql = q_prefix + &final_id;
+    let sql = q_prefix + final_id.as_str();
 
     // CWE 89
     //SINK
@@ -884,7 +884,7 @@ fn perform_ldap_search(base: String, filter: String) -> Result<Vec<String>, Stri
         .map_err(|e| format!("bind did not succeed: {:?}", e))?;
 
     // CWE 90
-    // SINK
+    //SINK
     let search_result = ldap.search(&base, Scope::Subtree, &filter, vec!["*"]);
 
     match search_result {
@@ -1006,10 +1006,165 @@ fn rocket() -> _ {
                 get_external_html,
                 get_user_expression,
                 get_user_email,
-                get_config_list
+                get_config_list,
+                set_user_data,
+                calculate_offset,
+                save_data_file,
+                process_offset,
+                check_mem_availability,
+                run_custom_code,
+                refresh_token,
+                get_payload
             ],
         )
         .mount("/1", routes![index])
         .mount("/2", routes![index])
         .mount("/3", routes![index])
+}
+
+#[post("/setuserdata", data = "<module_bytes>")]
+//CWE 502
+//SOURCE
+pub async fn set_user_data(module_bytes: Data<'_>) -> Result<String, Status> {
+    let user_input: Vec<u8> = module_bytes.open(10_u64.mebibytes()).into_bytes().await.map_err(|_| Status::BadRequest)?.into_inner();
+    let engine = WasmEngine::default();
+    let ptr = NonNull::new(user_input.as_ptr() as *mut u8).ok_or(Status::BadRequest)?;
+    let memory = NonNull::slice_from_raw_parts(ptr, user_input.len());
+    //CWE 502
+    //SINK
+    let module = unsafe { wasmtime::Module::deserialize_raw(&engine, memory) }.map_err(|_| Status::BadRequest)?;
+    let exports_count = module.exports().count();
+    env::set_var("WASM_MODULE_EXPORTS", exports_count.to_string());
+    env::set_var("WASM_MODULE_LOADED", "true");
+    Ok(format!("Loaded module with {} exports", exports_count))
+}
+
+#[get("/calculateoffset?<divisor>")]
+//CWE 369
+//SOURCE
+pub fn calculate_offset(divisor: i32) -> String {
+    let total_items: i32 = 1000;
+    //CWE 369
+    //SINK
+    let offset = total_items / divisor;
+    format!("Calculated offset: {}", offset)
+}
+
+#[post("/savedatafile?<file_path>&<data>")]
+//CWE 732
+//SOURCE
+pub fn save_data_file(file_path: String, data: String) -> String {
+    let content = data;
+    std::fs::write(&file_path, content).unwrap_or_default();
+    let mode = Mode::from_bits_truncate(0o644);
+    let cwd = std::fs::File::open(".").unwrap();
+    //CWE 732
+    //SINK
+    let _ = fchmodat(Some(cwd.as_raw_fd()), file_path.as_str(), mode, FchmodatFlags::FollowSymlink);
+    "Data file created successfully".to_string()
+}
+
+#[post("/processoffset?<iterations>")]
+//CWE 606
+//SOURCE
+fn process_offset(iterations: i32) -> Result<String, Status> {
+    let mut total = 0;
+    //CWE 606
+    //SINK
+    for i in 0..iterations {
+        env::set_var("CURRENT_OFFSET", i.to_string());
+        total += i;
+    }
+    Ok(format!("Processing completed with total: {}", total))
+}
+
+#[get("/checkmemavailability?<size>")]
+//CWE 789
+//SOURCE
+fn check_mem_availability(size: usize) -> Status {
+    //CWE 789
+    //SINK
+    let _buffer: Vec<u8> = Vec::with_capacity(size);
+    Status::Ok
+}
+
+#[get("/runcustomcode?<code>")]
+//CWE 94
+//SOURCE
+fn run_custom_code(code: String) -> String {
+    let engine = Engine::new();
+    let mut scope = rhai::Scope::new();
+    scope.push("base_value", 100_i64);
+    //CWE 94
+    //SINK
+    match engine.eval_with_scope::<i64>(&mut scope, &code) {
+        Ok(result) => result.to_string(),
+        Err(err) => err.to_string(),
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct TokenClaims {
+    sub: String,
+    exp: usize,
+}
+
+#[get("/refreshtoken?<token>")]
+//CWE 347
+//SOURCE
+fn refresh_token(token: String) -> String {
+    //CWE 347
+    //SINK
+    let header = decode_header(&token);
+    
+    let header_info = match &header {
+        Ok(h) => format!("alg: {:?}, typ: {:?}, kid: {:?}", h.alg, h.typ, h.kid),
+        Err(_) => "no header info".to_string(),
+    };
+    
+    let claims = match header {
+        Ok(_) => TokenClaims {
+            sub: format!("user_from_token_{}", header_info),
+            exp: 10000000000,
+        },
+        Err(_) => TokenClaims {
+            sub: "default_user".to_string(),
+            exp: 10000000000,
+        },
+    };
+
+    //CWE 330
+    //SOURCE
+    let mut rng = StdRng::seed_from_u64(11111);
+    //CWE 330
+    //SINK
+    let salt = SaltString::generate(&mut rng);
+    let secret_key = salt.as_str();
+
+    let new_token = encode(&Header::default(), &claims, &EncodingKey::from_secret(secret_key.as_bytes()))
+        .unwrap_or_else(|_| "error".to_string());
+    format!("Refreshed token: {}", new_token)
+}
+
+#[get("/getpayload")]
+async fn get_payload() -> Result<String, Status> {
+    //CWE 295
+    //SINK
+    let client = HttpClient::builder().ssl_options(SslOption::DANGER_ACCEPT_INVALID_CERTS)
+        .build()
+        .map_err(|_| Status::InternalServerError)?;
+
+    let request = Request::get("https://www.google.com")
+        .body(())
+        .map_err(|_| Status::BadRequest)?;
+
+    match client.send_async(request).await {
+        Ok(mut response) => {
+            match response.text().await {
+                Ok(body) => Ok(format!("Payload received: {}", body)),
+                Err(_) => Err(Status::InternalServerError),
+            }
+        }
+        Err(_) => Err(Status::BadRequest),
+    }
 }

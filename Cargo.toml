@@ -38,3 +38,10 @@ sxd-document = "0.3.2"
 unsafe-libyaml = "0.2"
 
 rocket_cors = "0.6.0"
+
+nix = { version = "0.29", features = ["fs"] }
+rhai = "1.19"
+jsonwebtoken = "9"
+rand = "0.8"
+password-hash = "0.5"
+wasmtime = { version = "39.0.1", features = ["cranelift"] }
